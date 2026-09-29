@@ -10,7 +10,14 @@ from pydantic import BaseModel
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import Session, declarative_base, relationship, sessionmaker
 
-engine = create_engine("sqlite:///./zoom.db", connect_args={"check_same_thread": False})
+import os
+
+DATABASE_URL = os.environ["DATABASE_URL"]
+
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False)
 Base = declarative_base()
 now = lambda: datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC
