@@ -38,7 +38,6 @@ export default function Room() {
   const [camOn, setCamOn] = useState(true);
   const [showPeople, setShowPeople] = useState(true);
   const [copied, setCopied] = useState(false);
-  const [realtimeReady, setRealtimeReady] = useState(false);
 
   const stream = useRef(null);
   const videoEl = useRef(null);
@@ -123,40 +122,23 @@ export default function Room() {
   // Create peer connection
   // ------------------------------------------------------------
 
-  const sendSignal = useCallback(async (payload) => {
-    if (!channel.current || !realtimeReady) return false;
-
-    try {
-      await channel.current.send({
-        type: "broadcast",
-        event: "signal",
-        payload,
-      });
-      return true;
-    } catch (err) {
-      console.error("Signal send failed:", err);
-      return false;
-    }
-  }, [realtimeReady]);
-
   const createPeer = useCallback(
     async (peerId, shouldOffer) => {
-      if (!me || !stream.current || !realtimeReady) return null;
+      if (!me || !stream.current) return null;
 
-      const id = Number(peerId);
-      if (id === Number(me.id)) return null;
+      if (peerId === me.id) return null;
 
-      if (peers.current.has(id)) {
-        return peers.current.get(id);
+      if (peers.current.has(peerId)) {
+        return peers.current.get(peerId);
       }
 
       console.log(
-        `Creating peer connection ${me.id} -> ${id}`
+        `Creating peer connection ${me.id} -> ${peerId}`
       );
 
       const pc = new RTCPeerConnection(ICE_SERVERS);
 
-      peers.current.set(id, pc);
+      peers.current.set(peerId, pc);
 
       // Send our camera/microphone tracks
       stream.current.getTracks().forEach((track) => {
@@ -187,11 +169,15 @@ export default function Room() {
       pc.onicecandidate = async (event) => {
         if (!event.candidate) return;
 
-        await sendSignal({
-          type: "ice",
-          from: me.id,
-          to: id,
-          candidate: event.candidate,
+        await channel.current?.send({
+          type: "broadcast",
+          event: "signal",
+          payload: {
+            type: "ice",
+            from: me.id,
+            to: peerId,
+            candidate: event.candidate,
+          },
         });
       };
 
@@ -226,17 +212,21 @@ export default function Room() {
 
         await pc.setLocalDescription(offer);
 
-        await sendSignal({
-          type: "offer",
-          from: me.id,
-          to: id,
-          offer,
+        await channel.current?.send({
+          type: "broadcast",
+          event: "signal",
+          payload: {
+            type: "offer",
+            from: me.id,
+            to: peerId,
+            offer,
+          },
         });
       }
 
       return pc;
     },
-    [me, realtimeReady, sendSignal]
+    [me]
   );
 
   // ------------------------------------------------------------
@@ -245,30 +235,11 @@ export default function Room() {
 
   const handleSignal = useCallback(
     async (payload) => {
-      if (!me || !payload) return;
+      if (!me) return;
 
-      if (
-        payload.to !== null &&
-        payload.to !== undefined &&
-        Number(payload.to) !== Number(me.id)
-      ) {
-        return;
-      }
+      if (payload.to !== me.id) return;
 
-      const peerId = Number(payload.from);
-
-      if (peerId === Number(me.id)) return;
-
-      // --------------------------------------------------------
-      // READY
-      // --------------------------------------------------------
-
-      if (payload.type === "ready") {
-        if (Number(me.id) < peerId) {
-          await createPeer(peerId, true);
-        }
-        return;
-      }
+      const peerId = payload.from;
 
       // --------------------------------------------------------
       // OFFER
@@ -307,11 +278,15 @@ export default function Room() {
 
         await pc.setLocalDescription(answer);
 
-        await sendSignal({
-          type: "answer",
-          from: me.id,
-          to: peerId,
-          answer,
+        await channel.current?.send({
+          type: "broadcast",
+          event: "signal",
+          payload: {
+            type: "answer",
+            from: me.id,
+            to: peerId,
+            answer,
+          },
         });
 
         return;
@@ -398,7 +373,7 @@ export default function Room() {
         });
       }
     },
-    [me, createPeer, sendSignal]
+    [me, createPeer]
   );
 
   // ------------------------------------------------------------
@@ -407,9 +382,6 @@ export default function Room() {
 
   useEffect(() => {
     if (!me) return;
-
-    let cancelled = false;
-    setRealtimeReady(false);
 
     const roomChannel = supabase.channel(
       `meeting:${code}`,
@@ -424,21 +396,19 @@ export default function Room() {
 
     channel.current = roomChannel;
 
-    roomChannel.on(
-      "broadcast",
-      { event: "signal" },
-      ({ payload }) => {
-        handleSignal(payload);
-      }
-    );
+    roomChannel
+      .on(
+        "broadcast",
+        { event: "signal" },
+        ({ payload }) => {
+          handleSignal(payload);
+        }
+      )
+      .subscribe(async (status) => {
+        console.log("Realtime status:", status);
 
-    roomChannel.subscribe(async (status) => {
-      console.log("Realtime status:", status);
-
-      if (status === "SUBSCRIBED" && !cancelled) {
-        setRealtimeReady(true);
-
-        try {
+        if (status === "SUBSCRIBED") {
+          // Tell everyone that we're ready for WebRTC
           await roomChannel.send({
             type: "broadcast",
             event: "signal",
@@ -448,25 +418,12 @@ export default function Room() {
               to: null,
             },
           });
-        } catch (err) {
-          console.error("Failed to broadcast ready:", err);
         }
-      }
-
-      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
-        setRealtimeReady(false);
-      }
-    });
+      });
 
     return () => {
-      cancelled = true;
-      setRealtimeReady(false);
-
-      if (channel.current === roomChannel) {
-        channel.current = null;
-      }
-
       supabase.removeChannel(roomChannel);
+      channel.current = null;
     };
   }, [me, code, handleSignal]);
 
@@ -475,7 +432,7 @@ export default function Room() {
   // ------------------------------------------------------------
 
   useEffect(() => {
-    if (!me || !realtimeReady) return;
+    if (!me) return;
 
     const tick = async () => {
       try {
@@ -511,14 +468,14 @@ export default function Room() {
         // ------------------------------------------------------
 
         for (const participant of r.participants) {
-          if (Number(participant.id) === Number(me.id)) continue;
+          if (participant.id === me.id) continue;
 
           if (!peers.current.has(participant.id)) {
             const shouldOffer =
               Number(me.id) < Number(participant.id);
 
             await createPeer(
-              Number(participant.id),
+              participant.id,
               shouldOffer
             );
           }
@@ -533,7 +490,7 @@ export default function Room() {
     const timer = setInterval(tick, 2500);
 
     return () => clearInterval(timer);
-  }, [me, code, exit, createPeer, realtimeReady]);
+  }, [me, code, exit, createPeer]);
 
   // ------------------------------------------------------------
   // Keep local video attached
@@ -602,10 +559,14 @@ export default function Room() {
         }
       );
 
-      await sendSignal({
-        type: "leave",
-        from: me.id,
-        to: null,
+      await channel.current?.send({
+        type: "broadcast",
+        event: "signal",
+        payload: {
+          type: "leave",
+          from: me.id,
+          to: null,
+        },
       });
     } finally {
       exit();
@@ -699,7 +660,7 @@ export default function Room() {
         <div className="grid">
 
           {people.map((p) => {
-            const isMe = Number(p.id) === Number(me.id);
+            const isMe = p.id === me.id;
 
             const remoteStream =
               remoteStreams[p.id];
