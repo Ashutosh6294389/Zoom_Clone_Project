@@ -16,9 +16,18 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 
 engine = create_engine(
     DATABASE_URL,
-    pool_pre_ping=True
+    pool_pre_ping=True,
+    pool_size=1,
+    max_overflow=0,
+    pool_recycle=300,
 )
-SessionLocal = sessionmaker(bind=engine, autoflush=False)
+
+SessionLocal = sessionmaker(
+    bind=engine,
+    autoflush=False,
+    autocommit=False,
+)
+
 Base = declarative_base()
 now = lambda: datetime.now(timezone.utc).replace(tzinfo=None)  # naive UTC
 
