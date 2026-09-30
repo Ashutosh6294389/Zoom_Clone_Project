@@ -11,7 +11,7 @@ Video-conferencing web app modelled on Zoom's web UI: dashboard, instant meeting
 ```bash
 # Backend (http://localhost:8000, docs at /docs)
 cd backend
-python -m venv .venv && source .venv/bin/activate
+python -m venv .venv && source venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --reload
 
@@ -45,13 +45,13 @@ One user hosts many meetings; one meeting has many participants (participants ar
 
 ## Assumptions
 - No auth: a seeded "Demo User" is always logged in and hosts the meetings on the dashboard.
-- Camera/mic work locally through `getUserMedia`. **Media is not streamed between browsers** (no WebRTC signalling); other participants appear as avatar tiles driven by the database roster. Meeting logic (IDs, links, roster, mute all, remove, end) is fully functional.
+- Camera and microphone are captured with `getUserMedia` and sent directly between participants through WebRTC. Supabase Realtime carries WebSocket signaling (offers, answers, ICE candidates), presence, and in-meeting chat; the database roster still drives meeting controls. Screen sharing replaces the outgoing camera track for connected peers. The included public STUN server supports peer discovery, while a TURN server should be configured for production-grade connectivity across restrictive networks.
 - Times are stored in UTC and shown in the browser's local timezone.
 - The client polls the roster every 2.5s instead of using WebSockets.
 
 ## Deployment
 - Backend: Render/Railway (`uvicorn main:app --host 0.0.0.0 --port $PORT`). SQLite lives on the instance disk, so it resets on redeploy; the seed re-runs automatically.
-- Frontend: Vercel, with `NEXT_PUBLIC_API_URL` set to the deployed backend URL.
+- Frontend: Vercel, with `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_SUPABASE_URL`, and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` set in each deployed environment. Enable Supabase Email Auth and Realtime for login, chat, and signaling.
 
 ## Possible next steps
-WebRTC media via a signalling WebSocket, chat, screen share, login/signup.
+Add a TURN service for restrictive networks, persist chat history, and connect Supabase identities to the backend's meeting ownership model.

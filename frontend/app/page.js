@@ -8,6 +8,7 @@ import Navbar from "@/components/Navbar";
 import MeetingList from "@/components/MeetingList";
 import ScheduleModal from "@/components/ScheduleModal";
 import { api, enterMeeting, inviteLink, fmtCode } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -18,6 +19,8 @@ export default function Dashboard() {
   const [tab, setTab] = useState("upcoming");
   const [modal, setModal] = useState(false);
   const [toast, setToast] = useState("");
+  const [authReady, setAuthReady] = useState(!supabase);
+  const [authUser, setAuthUser] = useState(null);
 
   // Start with null so server and client render the same HTML
   const [time, setTime] = useState(null);
@@ -51,6 +54,27 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, [load]);
 
+  useEffect(() => {
+    if (!supabase) return;
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (!mounted) return;
+      setAuthUser(data.session?.user ?? null);
+      setAuthReady(true);
+      if (!data.session) router.replace("/login");
+    });
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
+      setAuthUser(session?.user ?? null);
+      setAuthReady(true);
+      if (!session) router.replace("/login");
+    });
+    return () => {
+      mounted = false;
+      subscription.subscription.unsubscribe();
+    };
+  }, [router]);
+
   const flash = (msg) => {
     setToast(msg);
 
@@ -61,7 +85,7 @@ export default function Dashboard() {
 
   async function start(code) {
     try {
-      await enterMeeting(code, user?.name || "Guest", true);
+      await enterMeeting(code, authUser?.user_metadata?.display_name || authUser?.email?.split("@")[0] || user?.name || "Guest", true);
       router.push(`/meeting/${code}`);
     } catch (e) {
       flash(e.message || "Unable to join meeting");
@@ -124,9 +148,14 @@ export default function Dashboard() {
 
   return (
     <>
-      <Navbar user={user} />
+      <Navbar
+        user={authUser ? { name: authUser.user_metadata?.display_name || authUser.email } : user}
+        onSignOut={supabase ? () => supabase.auth.signOut() : undefined}
+      />
 
-      <main className="dash">
+      {!authReady ? <main className="center-page">Loading your account...</main> : null}
+
+      {authReady && <main className="dash">
         <section>
           <div className="clock">
             <h1>
@@ -197,7 +226,7 @@ export default function Dashboard() {
             onCopy={copy}
           />
         </section>
-      </main>
+      </main>}
 
       {modal && (
         <ScheduleModal

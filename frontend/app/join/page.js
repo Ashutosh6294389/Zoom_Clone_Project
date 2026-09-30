@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import { api, enterMeeting } from "@/lib/api";
+import { supabase } from "@/lib/supabase";
 
 export default function JoinPage() {
   const router = useRouter();
@@ -14,7 +15,14 @@ export default function JoinPage() {
   useEffect(() => {
     const p = new URLSearchParams(window.location.search);
     if (p.get("code")) setId(p.get("code"));
-    api("/me").then((u) => setName(u.name)).catch(() => {});
+    if (supabase) {
+      supabase.auth.getSession().then(({ data }) => {
+        const user = data.session?.user;
+        if (user) setName(user.user_metadata?.display_name || user.email?.split("@")[0] || "");
+      });
+    } else {
+      api("/me").then((u) => setName(u.name)).catch(() => {});
+    }
   }, []);
 
   async function join() {

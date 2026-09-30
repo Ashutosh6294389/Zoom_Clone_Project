@@ -4,7 +4,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, Text, create_engine
@@ -146,6 +146,42 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 DEFAULT_USER_ID = 1  # no auth: assume the seeded user is logged in
 
 
+# WebRTC peers exchange offers, answers, and ICE candidates through this small
+# signaling hub. Media itself travels directly between browsers.
+class SignalingHub:
+    def __init__(self):
+        self.rooms: dict[str, dict[str, WebSocket]] = {}
+
+    async def connect(self, meeting_code: str, participant_id: str, websocket: WebSocket):
+        await websocket.accept()
+        room = self.rooms.setdefault(meeting_code, {})
+        peers = list(room)
+        room[participant_id] = websocket
+        await websocket.send_json({"type": "peers", "peers": peers})
+
+    async def disconnect(self, meeting_code: str, participant_id: str):
+        room = self.rooms.get(meeting_code)
+        if not room:
+            return
+        room.pop(participant_id, None)
+        if not room:
+            self.rooms.pop(meeting_code, None)
+            return
+        for peer in list(room.values()):
+            try:
+                await peer.send_json({"type": "participant-left", "participantId": participant_id})
+            except RuntimeError:
+                pass
+
+    async def relay(self, meeting_code: str, sender_id: str, target_id: str, signal: dict):
+        peer = self.rooms.get(meeting_code, {}).get(target_id)
+        if peer:
+            await peer.send_json({"type": "signal", "participantId": sender_id, "signal": signal})
+
+
+signaling = SignalingHub()
+
+
 # ---------- Schemas ----------
 class InstantIn(BaseModel):
     title: Optional[str] = None
@@ -165,6 +201,33 @@ class JoinIn(BaseModel):
 
 class MuteIn(BaseModel):
     is_muted: bool
+
+
+@app.websocket("/ws/meetings/{code}/participants/{participant_id}")
+async def signal_meeting(code: str, participant_id: int, websocket: WebSocket):
+    session = SessionLocal()
+    try:
+        participant = session.get(Participant, participant_id)
+        meeting = session.get(Meeting, participant.meeting_id) if participant else None
+        is_valid = bool(participant and meeting and meeting.code == normalize_code(code) and participant.status == "joined")
+    finally:
+        session.close()
+
+    if not is_valid:
+        await websocket.close(code=1008)
+        return
+
+    participant_key = str(participant_id)
+    await signaling.connect(normalize_code(code), participant_key, websocket)
+    try:
+        while True:
+            message = await websocket.receive_json()
+            if message.get("type") == "signal" and isinstance(message.get("signal"), dict):
+                await signaling.relay(normalize_code(code), participant_key, str(message.get("to", "")), message["signal"])
+    except WebSocketDisconnect:
+        pass
+    finally:
+        await signaling.disconnect(normalize_code(code), participant_key)
 
 
 # ---------- Routes ----------

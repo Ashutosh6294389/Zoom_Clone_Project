@@ -1,8 +1,8 @@
 "use client";
 import Link from "next/link";
-import { Settings, Bell } from "lucide-react";
+import { Settings, Bell, LogOut } from "lucide-react";
 
-export default function Navbar({ user }) {
+export default function Navbar({ user, onSignOut }) {
   return (
     <header className="nav">
       <div className="nav-left">
@@ -16,6 +16,7 @@ export default function Navbar({ user }) {
         <button className="icon-btn" aria-label="Notifications"><Bell size={20} /></button>
         <button className="icon-btn" aria-label="Settings"><Settings size={20} /></button>
         <div className="avatar" title={user?.name}>{user?.name?.[0] || "U"}</div>
+        {onSignOut && <button className="icon-btn" aria-label="Sign out" title="Sign out" onClick={onSignOut}><LogOut size={18} /></button>}
       </div>
     </header>
   );
